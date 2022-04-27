@@ -59,7 +59,6 @@ class ScenicServer(Server):
         try:
             result = self.simulator.simulate(scene,
                 maxSteps=self.maxSteps, verbosity=self.verbosity,
-                save_dir=self.save_dir, sensor_config=self.sensor_config,
                 maxIterations=self.maxIterations)
         except SimulationCreationError as e:
             if self.verbosity >= 1:
@@ -124,7 +123,6 @@ class SampleSimulator():
         try:
             result = self.simulator.simulate(scene,
                 maxSteps=self.maxSteps, verbosity=self.verbosity,
-                save_dir=self.save_dir, sensor_config=self.sensor_config,
                 maxIterations=self.maxIterations)
             result.worker_num = self.worker_num
         except SimulationCreationError as e:
