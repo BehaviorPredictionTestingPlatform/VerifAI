@@ -5,7 +5,7 @@ from dotmap import DotMap
 from verifai.samplers.scenic_sampler import ScenicSampler
 from verifai.scenic_server import ScenicServer
 from verifai.falsifier import generic_falsifier
-# from utils import sampleWithFeedback, checkSaveRestore
+from tests.utils import sampleWithFeedback, checkSaveRestore
 
 ## Basic
 
@@ -59,6 +59,19 @@ def test_save_restore(tmpdir):
         maxIterations=1
     )
     checkSaveRestore(sampler, tmpdir)
+
+def test_object_order():
+    sampler = ScenicSampler.fromScenicCode(
+        'ego = Object at 0 @ 0\n'
+        'for i in range(1, 11):\n'
+        '    Object at 2*i @ 0',
+        maxIterations=1
+    )
+    sample = sampler.nextSample()
+    objects = sample.objects
+    assert len(objects) == 11
+    for i, obj in enumerate(objects):
+        assert obj.position == pytest.approx((2*i, 0))
 
 ## Active sampling
 
@@ -129,4 +142,3 @@ def test_driving_dynamic(pathToLocalFile):
                                   server_class=ScenicServer,
                                   server_options=server_options)
     falsifier.run_falsifier()
-    print('end of test')

@@ -226,8 +226,10 @@ class ScenicSampler(FeatureSampler):
                    ignoredProperties=ignoredProperties)
 
     def nextSample(self, feedback=None):
-        self.lastScene, iterations = self.scenario.generate(
+        ret = self.scenario.generate(
             maxIterations=self.maxIterations, feedback=feedback, verbosity=0)
+        # print(ret)
+        self.lastScene, _ = ret
         return self.pointForScene(self.lastScene)
 
     def pointForScene(self, scene):
@@ -237,8 +239,8 @@ class ScenicSampler(FeatureSampler):
         assert scene.egoObject is scene.objects[0]
         objDomain = dom.domainNamed['objects']
         assert len(objDomain.domains) == len(scene.objects)
-        objects = (pointForObject(subdom, obj)
-                   for subdom, obj in zip(objDomain.domains, scene.objects))
+        objects = (pointForObject(objDomain.domainNamed[f'object{i}'], obj)
+                   for i, obj in enumerate(scene.objects))
         objPoint = objDomain.makePoint(*objects)
 
         paramDomain = dom.domainNamed['params']

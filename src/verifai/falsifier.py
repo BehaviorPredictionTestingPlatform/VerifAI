@@ -6,9 +6,7 @@ from dotmap import DotMap
 from verifai.monitor import mtl_specification, specification_monitor, multi_objective_monitor
 from verifai.error_table import error_table
 import numpy as np
-import pickle
 import progressbar
-import ray
 from statsmodels.stats.proportion import proportion_confint
 import time
 
@@ -20,7 +18,7 @@ def parallelized(server_class):
 
 class falsifier(ABC):
     def __init__(self, monitor, sampler_type=None, sampler=None, sample_space=None,
-                 falsifier_params=None, server_options={}, server_class=Server, use_carla=False):
+                 falsifier_params=None, server_options={}, server_class=Server):
         self.sample_space = sample_space
         self.sampler_type = sampler_type
         self.sampler = sampler
@@ -37,6 +35,9 @@ class falsifier(ABC):
             params.update(falsifier_params)
         if params.sampler_params is None:
             params.sampler_params = DotMap(thres=params.fal_thres)
+        self.multi = isinstance(self.monitor, multi_objective_monitor)
+        if self.multi:
+            params.sampler_params.priority_graph = self.monitor.graph
         self.save_error_table = params.save_error_table
         self.save_safe_table = params.save_safe_table
         self.error_table_path = params.error_table_path
@@ -80,6 +81,7 @@ class falsifier(ABC):
             self.safe_table = error_table(space = self.server.sample_space)
 
     def populate_error_table(self, sample, rho, error=True):
+        print(f'populate_error_table: rho = {rho}')
         if error:
             self.error_table.update_error_table(sample, rho)
             if self.error_table_path:
@@ -124,50 +126,47 @@ class falsifier(ABC):
     def run_falsifier(self):
         i = 0
         ce_num = 0
-        counterexamples = []
         server_samples = []
         rhos = []
         self.total_sample_time = 0
         self.total_simulate_time = 0
-        # print(f'Running falsifier; server class is {type(self.server)}')
-        if self.n_iters is not None:
-            bar = progressbar.ProgressBar(max_value=self.n_iters)
-        else:
-            widgets = ['Scenes generated: ', progressbar.Counter('%(value)d'),
-               ' (', progressbar.Timer(), ')']
-            bar = progressbar.ProgressBar(widgets=widgets)
-        # bar = progressbar.ProgressBar(max_value=self.n_iters)
+        if self.verbosity >= 2:
+            print(f'Running falsifier; server class is {type(self.server)}')
+
+        if self.verbosity >= 1:
+            if self.n_iters is not None:
+                bar = progressbar.ProgressBar(max_value=self.n_iters)
+            else:
+                widgets = ['Scenes generated: ', progressbar.Counter('%(value)d'),
+                ' (', progressbar.Timer(), ')']
+                bar = progressbar.ProgressBar(widgets=widgets)
+
         while True:
             try:
                 sample, rho, (sample_time, simulate_time) = self.server.run_server()
                 self.total_sample_time += sample_time
                 self.total_simulate_time += simulate_time
-                # print(f'sample = {sample}, rho = {rho}')
             except TerminationException:
                 if self.verbosity >= 1:
                     print("Sampler has generated all possible samples")
                 break
-            # if self.verbosity >= 1:
-            #     print("Sample no: ", i, "\nSample: ", sample, "\nRho: ", rho)
+            if self.verbosity >= 2:
+                print("Sample no: ", i, "\nSample: ", sample, "\nRho: ", rho)
             self.samples[i] = sample
             server_samples.append(sample)
             counterexamples.append(any([r <= self.fal_thres for r in rho]))
             rhos.append(rho)
             i += 1
-            bar.update(i)
+            if self.verbosity >= 1:
+                bar.update(i)
             if i == 1:
                 t0 = time.time()
             if self.n_iters is not None and i == self.n_iters:
                 break
             if self.max_time is not None and time.time() - t0 >= self.max_time:
                 break
-        if isinstance(self.monitor, multi_objective_monitor):
-            counterexamples = self.server.sampler.scenario.externalSampler.sampler.domainSampler.split_sampler.samplers[0].counterexample_values
-        for sample, ce, rho in zip(server_samples, counterexamples, rhos):
-            # if isinstance(rho, (list, tuple)):
-            #     check_var = rho[-1]
-            # else:
-            #     check_var = rho
+        for sample, rho in zip(server_samples, rhos):
+            ce = any([r <= self.fal_thres for r in rho]) if self.multi else rho <= self.fal_thres
             if ce:
                 if self.save_error_table:
                     self.populate_error_table(sample, rho)
@@ -181,8 +180,7 @@ class falsifier(ABC):
 
 class generic_falsifier(falsifier):
     def __init__(self,  monitor=None, sampler_type= None, sample_space=None, sampler=None,
-                 falsifier_params=None, server_options={}, server_class=Server, scenic_path=None,
-                 scenario_params={}, num_workers=None):
+                 falsifier_params=None, server_options={}, server_class=Server):
         if monitor is None:
             class monitor(specification_monitor):
                 def __init__(self):
@@ -206,19 +204,17 @@ class mtl_falsifier(generic_falsifier):
 class parallel_falsifier(falsifier):
 
     def __init__(self, monitor, sampler_type=None, sample_space=None,
-                 falsifier_params=None, server_options={}, server_class=Server, num_workers=5,
-                 scenic_path=None, use_carla=False, sampler=None):
-        self.scenic_path = scenic_path
-        self.num_workers = num_workers
-        self.use_carla = use_carla
+                 falsifier_params=None, server_options={}, server_class=Server, 
+                 sampler=None):
+        self.num_workers = server_options.num_workers
+        self.scenic_path = server_options.scenic_path
         super().__init__(sample_space=sample_space, sampler_type=sampler_type,
                          monitor=monitor, falsifier_params=falsifier_params, sampler=sampler,
                          server_options=server_options, server_class=parallelized(server_class))
 
 class generic_parallel_falsifier(parallel_falsifier):
     def __init__(self, monitor=None, sampler_type= None, sample_space=None, sampler=None,
-                 falsifier_params=None, server_options={}, server_class=Server, num_workers=5,
-                 scenic_path=None, use_carla=False, scenario_params={}):
+                 falsifier_params=None, server_options={}, server_class=Server):
         if monitor is None:
             class monitor(specification_monitor):
                 def __init__(self):
@@ -226,12 +222,12 @@ class generic_parallel_falsifier(parallel_falsifier):
                         return np.inf
                     super().__init__(specification)
             monitor = monitor()
-        self.scenario_params = scenario_params
+        self.scenario_params = server_options.scenario_params
 
         super().__init__(sample_space=sample_space, sampler_type=sampler_type,
                          monitor=monitor, falsifier_params=falsifier_params,
                          server_options=server_options, server_class=server_class,
-                         num_workers=num_workers, scenic_path=scenic_path, sampler=sampler)
+                         sampler=sampler)
 
     def init_server(self, server_options, server_class):
         if self.verbosity >= 1:
@@ -244,7 +240,7 @@ class generic_parallel_falsifier(parallel_falsifier):
         sampling_data.sampler_params = self.sampler_params
 
         self.server = server_class(self.num_workers, self.n_iters, sampling_data, self.scenic_path,
-        self.monitor, options=server_options, use_carla=self.use_carla, max_time=self.max_time,
+        self.monitor, options=server_options, max_time=self.max_time,
         scenario_params=self.scenario_params, sampler=self.sampler)
 
     def run_falsifier(self):
@@ -253,17 +249,13 @@ class generic_parallel_falsifier(parallel_falsifier):
         outputs = self.server.run_server()
         samples, rhos = zip(*outputs)
         if isinstance(self.monitor, multi_objective_monitor):
-            counterexamples = self.server.sampler.scenario.externalSampler.sampler.domainSampler.split_sampler.samplers[0].counterexample_values
+            counterexamples = [any([r <= self.fal_thres for r in rho]) for rho in rhos]
         else:
             counterexamples = [r <= self.fal_thres for r in rhos]
         for i, (sample, ce, rho) in enumerate(zip(samples, counterexamples, rhos)):
             if self.verbosity >= 1:
                 print("Sample no: ", i, "\nSample: ", sample, "\nRho: ", rho)
             self.samples[i] = sample
-            # if isinstance(rho, (list, tuple)):
-            #     check_var = rho[-1]
-            # else:
-            #     check_var = rho
             if ce:
                 if self.save_error_table:
                     self.populate_error_table(sample, rho)
@@ -272,5 +264,3 @@ class generic_parallel_falsifier(parallel_falsifier):
                     break
             elif self.save_safe_table:
                 self.populate_error_table(sample, rho, error=False)
-        # while True:
-        # ray.get(self.server.terminate.remote())

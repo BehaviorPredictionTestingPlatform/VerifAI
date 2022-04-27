@@ -36,6 +36,8 @@ class MultiArmedBanditSampler(DomainSampler):
         for subsampler in self.split_sampler.samplers:
             if isinstance(subsampler, ContinuousMultiArmedBanditSampler):
                 assert self.cont_sampler is None
+                if 'priority_graph' in ce_params:
+                    subsampler.set_graph(ce_params.priority_graph)
                 self.cont_sampler = subsampler
             elif isinstance(subsampler, DiscreteMultiArmedBanditSampler):
                 assert self.disc_sampler is None
@@ -44,9 +46,6 @@ class MultiArmedBanditSampler(DomainSampler):
                 assert isinstance(subsampler, RandomSampler)
                 assert self.rand_sampler is None
                 self.rand_sampler = subsampler
-
-    def nextSample(self, feedback=None):
-        return self.split_sampler.nextSample(feedback)
 
     def getSample(self):
         return self.split_sampler.getSample()
@@ -83,8 +82,7 @@ class ContinuousMultiArmedBanditSampler(BoxSampler, MultiObjectiveSampler):
         self.rho_values = []
         self.restart_every = restart_every
 
-    def nextVector(self, feedback=None):
-        self.update(None, self.current_sample, feedback)
+    def getVector(self):
         return self.generateSample()
     
     def generateSample(self):
@@ -98,33 +96,20 @@ class ContinuousMultiArmedBanditSampler(BoxSampler, MultiObjectiveSampler):
               in zip(self.buckets, bucket_samples))
         return ret, bucket_samples
     
-    def update(self, sample, info, rho):
-        if rho is None:
-            return
-        # print(rho)
+    def updateVector(self, vector, info, rho):
+        assert rho is not None
         self.t += 1
         # "random restarts" to generate a new topological sort of the priority graph
         # every restart_every samples.
         if self.is_multi:
             if self.monitor is not None and self.monitor.linearize and t % self.restart_every == 0:
                 self.monitor._linearize()
-            self.update_dist_from_multi(sample, info, rho)
+            self.update_dist_from_multi(vector, info, rho)
             return
         for i, b in enumerate(info):
             self.counts[i][b] += 1.
             if rho < self.thres:
                 self.errors[i][b] += 1.
-        # print(self.errors / self.counts)
-
-    def set_graph(self, graph):
-        self.priority_graph = graph
-        try:
-            self.thres = [self.thres] * graph.number_of_nodes()
-        except Exception as e:
-            print(e)
-            assert len(self.thres) == graph.number_of_nodes(), 'Must have as many thresholds as graph nodes'
-        self.num_properties = graph.number_of_nodes()
-        self.is_multi = True
 
     # is rho1 better than rho2?
     # partial pre-ordering on objective functions, so it is possible that:

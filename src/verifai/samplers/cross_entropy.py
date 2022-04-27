@@ -44,9 +44,6 @@ class CrossEntropySampler(DomainSampler):
                 assert self.rand_sampler is None
                 self.rand_sampler = subsampler
 
-    def nextSample(self, feedback=None):
-        return self.split_sampler.nextSample(feedback)
-
     def getSample(self):
         return self.split_sampler.getSample()
 
@@ -73,11 +70,7 @@ class ContinuousCrossEntropySampler(BoxSampler):
         self.thres = thres
         self.current_sample = None
 
-    def nextVector(self, feedback=None):
-        self.update(None, self.current_sample, feedback)
-        return self.generateSample()
-    
-    def generateSample(self):
+    def getVector(self):
         bucket_samples = np.array([np.random.choice(int(b), p=self.dist[i])
                                    for i, b in enumerate(self.buckets)])
         self.current_sample = bucket_samples
@@ -85,21 +78,13 @@ class ContinuousCrossEntropySampler(BoxSampler):
               in zip(self.buckets, bucket_samples))
         return ret, bucket_samples
     
-    def update(self, sample, info, rho):
+    def updateVector(self, vector, info, rho):
         if rho is None or rho >= self.thres:
             return
         update_dist = np.array([np.zeros(int(b)) for b in self.buckets])
         for ud,b in zip(update_dist, info):
             ud[b] = 1.
         self.dist = self.alpha*self.dist + (1-self.alpha)*update_dist
-
-    '''
-    New API:
-    1) getSample which just samples from the distribution
-    2) update which takes in the sample and rho value to update distribution
-    3) nextSample
-    '''
-
 
 class DiscreteCrossEntropySampler(DiscreteBoxSampler):
     def __init__(self, domain, alpha, thres, dist=None):
@@ -114,21 +99,19 @@ class DiscreteCrossEntropySampler(DiscreteBoxSampler):
         self.thres = thres
         self.current_sample = None
 
-    def nextVector(self, feedback=None):
-        if feedback is None:
-            pass
-            # assert self.current_sample is None
-        elif feedback < self.thres:
-            self.update_dist()
+    def getVector(self):
         self.current_sample=\
             tuple(left + np.random.choice(right-left+1, p=self.dist[i])
                      for i, (left, right) in enumerate(self.domain.standardizedIntervals))
         return self.current_sample, None
 
-    def update_dist(self):
+    def updateVector(self, vector, info, rho):
+        assert rho is not None
+        if rho >= self.thres:
+            return
         update_dist = np.array([np.zeros(right-left+1)
                                 for left, right in self.domain.standardizedIntervals])
-        for i, (ud, b) in enumerate(zip(update_dist, self.current_sample)):
+        for i, (ud, b) in enumerate(zip(update_dist, vector)):
             left, _ = self.domain.standardizedIntervals[i]
             ud[b-left] = 1.
 
@@ -145,11 +128,7 @@ class MultiContinuousCrossEntropySampler(ContinuousCrossEntropySampler):
         super().__init__(domain, alpha, thres, buckets=10, dist=dist)
         self.counts = np.array([np.zeros(int(b)) for b in self.buckets])
 
-    def nextVector(self, feedback=None):
-        self.update(None, self.current_sample, feedback)
-        return self.generateSample()
-    
-    def generateSample(self):
+    def getVector(self):
         if not self.still_sampling:
             self.sample_randomly = np.random.uniform() < self.epsilon
         if self.sample_randomly:
@@ -163,17 +142,13 @@ class MultiContinuousCrossEntropySampler(ContinuousCrossEntropySampler):
               in zip(self.buckets, bucket_samples))
         return ret, bucket_samples
 
-
     def set_graph(self, graph):
         self.priority_graph = graph
-        try:
+        if graph is not None:
             self.thres = [self.thres] * graph.number_of_nodes()
-        except Exception as e:
-            print(e)
-            assert len(self.thres) == graph.number_of_nodes(), 'Must have as many thresholds as graph nodes'
-        self.num_properties = graph.number_of_nodes()
+            self.num_properties = graph.number_of_nodes()
 
-    def update(self, sample, info, rho):
+    def updateVector(self, vector, info, rho):
         if isinstance(rho, int):
             self.still_sampling = True
             return
@@ -196,4 +171,3 @@ class MultiContinuousCrossEntropySampler(ContinuousCrossEntropySampler):
             self.counts[i][b] += 1
         for _ in range(num_updates):
             self.dist = self.alpha*self.dist + (1-self.alpha)*update_dist
-        print(self.dist)

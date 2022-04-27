@@ -30,8 +30,6 @@ class ScenicServer(Server):
         else:
             self.rejectionFeedback = extSampler.rejectionFeedback
         self.monitor = monitor
-        if isinstance(self.monitor, multi_objective_monitor):
-            self.sampler.scenario.externalSampler.sampler.domainSampler.split_sampler.samplers[0].set_graph(self.monitor.graph)
         self.lastValue = None
         defaults = DotMap(maxSteps=None, verbosity=0, maxIterations=1)
         defaults.update(options)
@@ -78,12 +76,12 @@ class ScenicServer(Server):
 class DummySampler(VerifaiSampler):
 
     def nextSample(self, feedback):
-        return self.last_sample, None
+        return self.last_sample
 
 @ray.remote
 class SampleSimulator():
 
-    def __init__(self, scenic_path, worker_num, monitor, options={}, use_carla=False,
+    def __init__(self, scenic_path, worker_num, monitor, options={},
     scenario_params={}):
         print(scenario_params)
         scenario_params.update({
@@ -152,7 +150,7 @@ class SampleSimulator():
 class ParallelScenicServer(ScenicServer):
 
     def __init__(self, total_workers, n_iters, sampling_data, scenic_path, monitor,
-    options={}, use_carla=False, max_time=None, scenario_params={}, sampler=None):
+    options={}, max_time=None, scenario_params={}, sampler=None):
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
         self.total_workers = total_workers
@@ -163,15 +161,13 @@ class ParallelScenicServer(ScenicServer):
         super().__init__(sampling_data, monitor, options)
         print(f'Sampler class is {type(self.sampler)}')
         self.sample_simulators = [SampleSimulator.remote(scenic_path, i, monitor, options,
-        use_carla, scenario_params)
+        scenario_params)
         for i in range(self.total_workers)]
 
     def _generate_next_sample(self, worker_num):
         i = 0
-        feedback = self.lastValue
         ext = self.sampler.scenario.externalSampler
         while i < 2000:
-            t0 = time.time()
             ext.cachedSample, info = ext.getSample()
             sample = ext.cachedSample
             sim = self.sample_simulators[worker_num]
@@ -184,12 +180,10 @@ class ParallelScenicServer(ScenicServer):
                 return None, None
             except RejectionException as e:
                 i += 1
-                feedback = ext.rejectionFeedback
                 continue
         return None, None
 
     def run_server(self):
-        startTime = time.time()
         results = []
         futures = []
         samples = []
@@ -210,7 +204,6 @@ class ParallelScenicServer(ScenicServer):
         while True:
             done, _ = ray.wait(futures)
             result = ray.get(done[0])
-            t = time.time() - startTime
             index, sample, rho = result
             self.lastValue = rho
             results.append((sample, rho))
