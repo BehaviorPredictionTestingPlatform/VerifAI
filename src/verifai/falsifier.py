@@ -154,7 +154,6 @@ class falsifier(ABC):
                 print("Sample no: ", i, "\nSample: ", sample, "\nRho: ", rho)
             self.samples[i] = sample
             server_samples.append(sample)
-            counterexamples.append(any([r <= self.fal_thres for r in rho]))
             rhos.append(rho)
             i += 1
             if self.verbosity >= 1:

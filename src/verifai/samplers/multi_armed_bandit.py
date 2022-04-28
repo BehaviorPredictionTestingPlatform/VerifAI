@@ -108,7 +108,10 @@ class ContinuousMultiArmedBanditSampler(BoxSampler, MultiObjectiveSampler):
             return
         for i, b in enumerate(info):
             self.counts[i][b] += 1.
-            if rho < self.thres:
+            if isinstance(rho, tuple): 
+                if any([r < self.thres for r in rho]):
+                    self.errors[i][b] += 1.
+            elif rho < self.thres:
                 self.errors[i][b] += 1.
 
     # is rho1 better than rho2?
